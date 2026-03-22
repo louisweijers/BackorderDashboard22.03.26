@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -416,12 +415,12 @@ async function picqerAlles(pad) {
 
 // ── Data laden ────────────────────────────────────────────────────────────────
 async function loadData() {
-  // Haal subdomain en API key op uit input velden of server config
+  // Haal subdomain op — API key niet nodig op Render (server regelt dat)
   PICQER_SUBDOMAIN = document.getElementById('subdomain')?.value?.trim() || PICQER_SUBDOMAIN;
-  PICQER_API_KEY   = document.getElementById('apikey')?.value?.trim()   || PICQER_API_KEY;
-  if (!PICQER_SUBDOMAIN || !PICQER_API_KEY) {
+  PICQER_API_KEY   = document.getElementById('apikey')?.value?.trim()    || PICQER_API_KEY || 'server';
+  if (!PICQER_SUBDOMAIN) {
     document.getElementById('dashboard-inhoud').innerHTML =
-      `<div class="state-box"><div class="error-msg">⚠ Vul je subdomein en API sleutel in.</div></div>`;
+      `<div class="state-box"><div class="error-msg">⚠ Vul je subdomein in.</div></div>`;
     return;
   }
   laadStatus();
@@ -861,10 +860,9 @@ window.addEventListener('load', async () => {
       const cfg = await resp.json();
       if (cfg.subdomain) {
         PICQER_SUBDOMAIN = cfg.subdomain;
-        document.getElementById('subdomain').value = cfg.subdomain;
-        // Op Render: verberg config panel en laad automatisch
+        PICQER_API_KEY   = 'server';
+        // Verberg config panel en laad automatisch
         document.querySelector('.config').style.display = 'none';
-        PICQER_API_KEY = 'server';
         window.loadData();
       }
     }
@@ -884,4 +882,3 @@ window.addEventListener('load', async () => {
 </script>
 </body>
 </html>
-
