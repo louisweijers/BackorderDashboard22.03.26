@@ -751,35 +751,36 @@ function renderTabel() {
         ? `We verwachten de artikelen rond ${leverdatums[0]} te ontvangen.`
         : `We houden je op de hoogte zodra we meer weten over de levertijd.`;
 
-      // Beschikbare producten voor in de mail
-      const beschikbareProducten = rij.producten
-        .filter(p => p.isBO && p.status === 'op-voorraad')
-        .map(p => `- ${p.naam} (${p.bo} stuks)`)
+      // Alle producten voor in de mail
+      const alleProductenMail = rij.producten
+        .filter(p => p.isBO)
+        .map(p => {
+          if (p.status === 'niet-ingekocht') {
+            return `- ${p.naam} (${p.bo} stuks) — ✗ momenteel niet op voorraad`;
+          } else if (p.status === 'besteld') {
+            let datumTekst = '';
+            if (p.leverdatum) {
+              // +1 dag verwerkingstijd
+              const d = new Date(p.leverdatum);
+              d.setDate(d.getDate() + 1);
+              datumTekst = `, verwacht bij jou: ${fmtDatum(d.toISOString().split('T')[0])}`;
+            }
+            return `- ${p.naam} (${p.bo} stuks) — ✗ niet op voorraad${datumTekst}`;
+          } else {
+            return `- ${p.naam} (${p.bo} stuks) — ✓ beschikbaar`;
+          }
+        })
         .join('\n');
-      const beschikbaarTekst = beschikbareProducten
-        ? `De volgende artikelen staan al klaar voor verzending:\n\n${beschikbareProducten}\n\n`
-        : '';
-
-      // Keuze links via proxy
-      const subDom = PICQER_SUBDOMAIN;
-      const keuzeBase  = `/keuze?order=${encodeURIComponent(rij.ref)}&id=${rij.idorder}&sub=${subDom}`;
-      const linkWachten   = `${keuzeBase}&keuze=wachten`;
-      const linkDeellever = `${keuzeBase}&keuze=deellevering`;
 
       const mailOnderwerp = encodeURIComponent(`Update bestelling ${rij.ref}`);
       const mailTekst = encodeURIComponent(
         `Beste ${rij.klant},\n\n` +
-        `Bedankt voor je bestelling ${rij.ref} van ${fmtDatum(rij.datum)}.\n\n` +
-        `Helaas hebben we te maken met een voorraadkruising. De volgende artikelen zijn momenteel niet op voorraad:\n\n` +
-        `${boProducten}\n\n` +
-        `${beschikbaarTekst}` +
-        `${leverInfo}\n\n` +
-        `We willen je graag laten kiezen hoe je dit wil oplossen:\n\n` +
-        `👉 Wachten op volledige levering:\n\n` +
-        `${linkWachten}\n\n` +
-        `👉 Deellevering (alvast versturen wat beschikbaar is):\n\n` +
-        `${linkDeellever}\n\n` +
-        `Klik op de link van jouw voorkeur — je komt dan op een bevestigingspagina terecht.\n\n` +
+        `We hebben een vraag over je bestelling ${rij.ref} van ${fmtDatum(rij.datum)}.\n\n` +
+        `Je bestelling bestaat uit de volgende artikelen:\n\n` +
+        `${alleProductenMail}\n\n` +
+        `Wat is jouw voorkeur?\n` +
+        `1. Wachten — we sturen alles in één keer zodra alles beschikbaar is\n` +
+        `2. Deellevering — we sturen alvast wat beschikbaar is, de rest volgt later\n\n` +
         `${handtekening}`
       );
       const mailLink = `mailto:${rij.email}?subject=${mailOnderwerp}&body=${mailTekst}`;
