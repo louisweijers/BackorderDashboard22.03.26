@@ -20,11 +20,11 @@ PICQER_API_KEY   = os.environ.get('PICQER_API_KEY', '')
 
 # ── Gebruikers ────────────────────────────────────────────────────────────────
 USERS = {
-    'louis':  generate_password_hash(os.environ.get('PASS_LOUIS',  'Welkom123!')),
-    'lars':   generate_password_hash(os.environ.get('PASS_LARS',   'Welkom123!')),
-    'birgit': generate_password_hash(os.environ.get('PASS_BIRGIT', 'Welkom123!')),
-    'tim':    generate_password_hash(os.environ.get('PASS_TIM',    'Welkom123!')),
-    'joran':  generate_password_hash(os.environ.get('PASS_JORAN',  'Welkom123!')),
+    'louis':  os.environ.get('PASS_LOUIS',  'Welkom123!'),
+    'lars':   os.environ.get('PASS_LARS',   'Welkom123!'),
+    'birgit': os.environ.get('PASS_BIRGIT', 'Welkom123!'),
+    'tim':    os.environ.get('PASS_TIM',    'Welkom123!'),
+    'joran':  os.environ.get('PASS_JORAN',  'Welkom123!'),
 }
 
 # ── Login vereist decorator ───────────────────────────────────────────────────
@@ -82,7 +82,7 @@ def login():
     if request.method == 'POST':
         username = request.form.get('username', '').lower().strip()
         password = request.form.get('password', '')
-        if username in USERS and check_password_hash(USERS[username], password):
+        if username in USERS and USERS[username] == password:
             session['user'] = username
             return redirect(url_for('dashboard'))
         error = 'Gebruikersnaam of wachtwoord onjuist.'
@@ -93,25 +93,21 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# ── Dashboard (serveert de HTML) ──────────────────────────────────────────────
 @app.route('/')
 @login_required
 def dashboard():
     html_path = os.path.join(os.path.dirname(__file__), 'picqer-backorders.html')
     with open(html_path, 'r', encoding='utf-8') as f:
         html = f.read()
-    # Injecteer gebruikersnaam
     html = html.replace('</body>', f'<script>window._user = "{session["user"]}";</script></body>')
     return html
 
-# ── Picqer API proxy ──────────────────────────────────────────────────────────
 @app.route('/picqer/<path:api_path>')
 @login_required
 def picqer_proxy(api_path):
     url = f"https://{PICQER_SUBDOMAIN}.picqer.com/api/v1/{api_path}"
     if request.query_string:
         url += '?' + request.query_string.decode()
-
     try:
         resp = requests.get(
             url,
@@ -123,28 +119,18 @@ def picqer_proxy(api_path):
     except Exception as e:
         return jsonify({'error': str(e)}), 502
 
-# ── Keuze pagina ──────────────────────────────────────────────────────────────
 @app.route('/keuze')
 def keuze():
     order = request.args.get('order', '?')
-    keuze = request.args.get('keuze', '')
+    keuze_val = request.args.get('keuze', '')
     sub   = request.args.get('sub', PICQER_SUBDOMAIN)
-
-    kleur  = '#16a34a' if keuze == 'wachten' else '#2563eb'
-    label  = 'Wachten op volledige levering' if keuze == 'wachten' else 'Deellevering gewenst'
-    icoon  = '⏳' if keuze == 'wachten' else '📦'
-
+    kleur  = '#16a34a' if keuze_val == 'wachten' else '#2563eb'
+    label  = 'Wachten op volledige levering' if keuze_val == 'wachten' else 'Deellevering gewenst'
+    icoon  = '⏳' if keuze_val == 'wachten' else '📦'
     team_email = 'info@boottotaal.nl' if 'boottotaal' in sub else 'verkoop@aquaservice.nl'
-
     mail_onderwerp = urllib.parse.quote(f"Keuze bestelling {order} - {label}")
-    mail_tekst     = urllib.parse.quote(
-        f"Hallo,\n\n"
-        f"Mijn keuze voor bestelling {order} is:\n\n"
-        f"➡ {label}\n\n"
-        f"Met vriendelijke groet"
-    )
+    mail_tekst = urllib.parse.quote(f"Hallo,\n\nMijn keuze voor bestelling {order} is:\n\n➡ {label}\n\nMet vriendelijke groet")
     mailto_link = f"mailto:{team_email}?subject={mail_onderwerp}&body={mail_tekst}"
-
     html = f"""<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <title>Keuze bestelling {order}</title>
@@ -156,7 +142,6 @@ def keuze():
       .badge{{display:inline-block;padding:8px 20px;border-radius:20px;font-size:15px;font-weight:600;background:{kleur};color:#fff;margin:16px 0}}
       p{{color:#475569;font-size:14px;line-height:1.6}}
       .mail-btn{{display:inline-block;margin-top:20px;padding:12px 28px;background:{kleur};color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}}
-      .mail-btn:hover{{opacity:.85}}
       .uitleg{{font-size:12px;color:#94a3b8;margin-top:12px;}}
     </style>
     <script>window.onload = function(){{ window.location.href = "{mailto_link}"; }}</script>
@@ -166,14 +151,12 @@ def keuze():
     <h2>Bedankt voor je keuze!</h2>
     <div class="badge">{label}</div>
     <p>Je hebt gekozen voor <strong>{label}</strong> voor bestelling <strong>{order}</strong>.</p>
-    <p style="margin-top:12px;">Er wordt automatisch een bevestigingsmail geopend. Klik op <strong>Verzenden</strong> om je keuze door te geven aan ons team.</p>
+    <p style="margin-top:12px;">Er wordt automatisch een bevestigingsmail geopend. Klik op <strong>Verzenden</strong> om je keuze door te geven.</p>
     <a href="{mailto_link}" class="mail-btn">✉ Bevestig je keuze per mail</a>
     <div class="uitleg">Werkt de mail niet automatisch? Klik dan op de knop hierboven.</div>
     </div></body></html>"""
-
     return html
 
-# ── Gebruiker info ────────────────────────────────────────────────────────────
 @app.route('/me')
 @login_required
 def me():
