@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -591,10 +592,30 @@ async function loadData() {
 
     updateStats();
     renderTabel();
-    document.getElementById('laatste-refresh').textContent =
-      'Laatste update: ' + new Date().toLocaleTimeString('nl-NL');
+    const nu = new Date().toLocaleTimeString('nl-NL');
+    document.getElementById('laatste-refresh').textContent = 'Laatste update: ' + nu;
+
+    // Sla data op in cache
+    try {
+      localStorage.setItem('bo_cache', JSON.stringify(alleRijen));
+      localStorage.setItem('bo_cache_tijd', new Date().toISOString());
+    } catch(e) {}
 
   } catch(err) {
+    // Bij fout: toon cache als die beschikbaar is
+    const cache = localStorage.getItem('bo_cache');
+    if (cache && alleRijen.length === 0) {
+      try {
+        alleRijen = JSON.parse(cache);
+        updateStats();
+        renderTabel();
+        const cacheTijd = localStorage.getItem('bo_cache_tijd');
+        const tijdLabel = cacheTijd ? fmtDatum(cacheTijd.split('T')[0]) : '?';
+        document.getElementById('laatste-refresh').textContent =
+          '⚠ Geen verbinding — cache van ' + tijdLabel;
+        return;
+      } catch(e2) {}
+    }
     document.getElementById('dashboard-inhoud').innerHTML = `
       <div class="state-box">
         <div class="error-msg">⚠ ${esc(err.message)}</div>
@@ -852,6 +873,20 @@ window.addEventListener('load', async () => {
   const key = localStorage.getItem('picqer_key');
   if (sub) { document.getElementById('subdomain').value = sub; PICQER_SUBDOMAIN = sub; }
   if (key) { document.getElementById('apikey').value   = key; PICQER_API_KEY   = key; }
+
+  // Laad cache meteen zodat je niet hoeft te wachten
+  try {
+    const cache     = localStorage.getItem('bo_cache');
+    const cacheTijd = localStorage.getItem('bo_cache_tijd');
+    if (cache) {
+      alleRijen = JSON.parse(cache);
+      updateStats();
+      renderTabel();
+      const tijdLabel = cacheTijd ? new Date(cacheTijd).toLocaleTimeString('nl-NL') : '?';
+      document.getElementById('laatste-refresh').textContent =
+        'Uit cache: ' + tijdLabel + ' — bezig met vernieuwen…';
+    }
+  } catch(e) {}
 
   // Probeer config van server te halen (werkt op Render)
   try {
