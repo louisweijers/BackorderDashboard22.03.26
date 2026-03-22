@@ -104,6 +104,7 @@ def dashboard():
 
 @app.route('/picqer/<path:api_path>')
 @login_required
+
 def picqer_proxy(api_path):
     url = f"https://{PICQER_SUBDOMAIN}.picqer.com/api/v1/{api_path}"
     if request.query_string:
