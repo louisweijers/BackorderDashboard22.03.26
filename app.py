@@ -106,7 +106,10 @@ def dashboard():
 @login_required
 
 def picqer_proxy(api_path):
-    url = f"https://{PICQER_SUBDOMAIN}.picqer.com/api/v1/{api_path}"
+    subdomain = PICQER_SUBDOMAIN
+    if api_path.startswith(subdomain + '/'):
+        api_path = api_path[len(subdomain) + 1:]
+    url = f"https://{subdomain}.picqer.com/api/v1/{api_path}"
     if request.query_string:
         url += '?' + request.query_string.decode()
     try:
