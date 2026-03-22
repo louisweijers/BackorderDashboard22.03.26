@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="nl">
 <head>
@@ -383,10 +384,13 @@ function esc(str) {
 
 // ── API ───────────────────────────────────────────────────────────────────────
 async function picqerGet(pad) {
-  // Gebruik relatieve URL — werkt zowel lokaal (proxy.py) als op Render (app.py)
-  const resp = await fetch(`/picqer/${PICQER_SUBDOMAIN}${pad}`, {
-    headers: { 'Authorization': 'Basic ' + btoa(PICQER_API_KEY + ':x') }
-  });
+  const headers = {};
+  // Lokaal: stuur Authorization header mee
+  // Op Render: proxy gebruikt server-side API key
+  if (PICQER_API_KEY && PICQER_API_KEY !== 'server') {
+    headers['Authorization'] = 'Basic ' + btoa(PICQER_API_KEY + ':x');
+  }
+  const resp = await fetch(`/picqer/${PICQER_SUBDOMAIN}${pad}`, { headers });
   if (!resp.ok) {
     const txt = await resp.text().catch(() => '');
     throw new Error(`Picqer API fout ${resp.status}: ${txt.slice(0,200)}`);
@@ -842,12 +846,33 @@ window.loadData = async function() {
   await _origLoadData();
   startRefreshCountdown();
 };
-window.addEventListener('load', () => {
+
+window.addEventListener('load', async () => {
+  // Lokale inloggegevens herstellen
   const sub = localStorage.getItem('picqer_sub');
   const key = localStorage.getItem('picqer_key');
   if (sub) { document.getElementById('subdomain').value = sub; PICQER_SUBDOMAIN = sub; }
   if (key) { document.getElementById('apikey').value   = key; PICQER_API_KEY   = key; }
+
+  // Probeer config van server te halen (werkt op Render)
+  try {
+    const resp = await fetch('/config');
+    if (resp.ok) {
+      const cfg = await resp.json();
+      if (cfg.subdomain) {
+        PICQER_SUBDOMAIN = cfg.subdomain;
+        document.getElementById('subdomain').value = cfg.subdomain;
+        // Op Render: verberg config panel en laad automatisch
+        document.querySelector('.config').style.display = 'none';
+        PICQER_API_KEY = 'server';
+        window.loadData();
+      }
+    }
+  } catch(e) {
+    // Lokaal draaien — config panel blijft zichtbaar
+  }
 });
+
 ['subdomain','apikey'].forEach(id => {
   document.getElementById(id).addEventListener('input', () => {
     PICQER_SUBDOMAIN = document.getElementById('subdomain').value;
@@ -859,3 +884,4 @@ window.addEventListener('load', () => {
 </script>
 </body>
 </html>
+
