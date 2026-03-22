@@ -157,6 +157,14 @@ def keuze():
     </div></body></html>"""
     return html
 
+@app.route('/config')
+@login_required
+def config():
+    return jsonify({
+        'subdomain': PICQER_SUBDOMAIN,
+        'user': session['user']
+    })
+
 @app.route('/me')
 @login_required
 def me():
