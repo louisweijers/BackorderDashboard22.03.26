@@ -1,920 +1,172 @@
+#!/usr/bin/env python3
+"""
+Backorder Dashboard - Flask Server voor Render
+"""
 
-<!DOCTYPE html>
+from flask import Flask, render_template_string, request, session, redirect, url_for, jsonify, Response
+from werkzeug.security import check_password_hash, generate_password_hash
+import requests
+import os
+import urllib.parse
+from functools import wraps
+
+app = Flask(__name__)
+app.secret_key = os.environ.get('SECRET_KEY', 'verander-dit-naar-iets-geheims-in-render')
+
+PICQER_SUBDOMAIN = os.environ.get('PICQER_SUBDOMAIN', 'boottotaalnl')
+PICQER_API_KEY   = os.environ.get('PICQER_API_KEY', '')
+
+USERS = {
+    'louis':  os.environ.get('PASS_LOUIS',  'Welkom123!'),
+    'lars':   os.environ.get('PASS_LARS',   'Welkom123!'),
+    'birgit': os.environ.get('PASS_BIRGIT', 'Welkom123!'),
+    'tim':    os.environ.get('PASS_TIM',    'Welkom123!'),
+    'joran':  os.environ.get('PASS_JORAN',  'Welkom123!'),
+}
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user' not in session:
+            return redirect(url_for('login'))
+        return f(*args, **kwargs)
+    return decorated
+
+LOGIN_HTML = """<!DOCTYPE html>
 <html lang="nl">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Backorder Dashboard</title>
+<title>Inloggen — Backorder Dashboard</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-  :root {
-    --bg:        #f1f5f9;
-    --white:     #ffffff;
-    --border:    #e2e8f0;
-    --border2:   #cbd5e1;
-    --accent:    #2563eb;
-    --accent-lt: #eff6ff;
-    --orange:    #ea580c;
-    --orange-lt: #fff7ed;
-    --green:     #16a34a;
-    --green-lt:  #f0fdf4;
-    --yellow:    #b45309;
-    --yellow-lt: #fffbeb;
-    --red:       #dc2626;
-    --red-lt:    #fef2f2;
-    --text:      #1e293b;
-    --text2:     #475569;
-    --text3:     #94a3b8;
-    --radius:    8px;
-    --shadow:    0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
-  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--text); font-family: 'Inter', sans-serif; font-size: 13px; min-height: 100vh; }
-  .wrap { max-width: 1700px; margin: 0 auto; padding: 24px 24px 60px; }
-
-  /* Header */
-  header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 22px; flex-wrap: wrap; gap: 12px; }
-  .brand-hdr { display: flex; align-items: center; gap: 12px; }
-  .logo-box { width: 38px; height: 38px; border-radius: 10px; background: var(--accent); display: flex; align-items: center; justify-content: center; font-size: 20px; }
-  h1 { font-size: 20px; font-weight: 700; }
-  .subtitle { color: var(--text3); font-size: 12px; margin-top: 2px; }
-
-  /* Config */
-  .config {
-    background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
-    padding: 16px 20px; display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap;
-    margin-bottom: 20px; box-shadow: var(--shadow);
-  }
-  .field { display: flex; flex-direction: column; gap: 5px; }
-  .field label { font-size: 11px; font-weight: 600; color: var(--text2); text-transform: uppercase; letter-spacing: .05em; }
-  .field input {
-    background: var(--bg); border: 1px solid var(--border2); color: var(--text);
-    font-family: 'Inter', sans-serif; font-size: 13px; padding: 8px 12px;
-    border-radius: 6px; outline: none; width: 220px; transition: border-color .15s, box-shadow .15s;
-  }
-  .field input.wide { width: 280px; }
-  .field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
-  .btn {
-    padding: 8px 18px; border-radius: 6px; border: none; cursor: pointer;
-    font-family: 'Inter', sans-serif; font-size: 13px; font-weight: 500; transition: all .15s;
-  }
-  .btn:active { transform: scale(.97); }
-  .btn-primary { background: var(--accent); color: #fff; }
-  .btn-primary:hover { background: #1d4ed8; }
-  .btn-secondary { background: var(--white); color: var(--text2); border: 1px solid var(--border2); }
-  .btn-secondary:hover { border-color: var(--accent); color: var(--accent); }
-
-  /* Stats */
-  .stats { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-  .stat {
-    flex: 1; min-width: 130px; background: var(--white); border: 1px solid var(--border);
-    border-radius: var(--radius); padding: 14px 18px; box-shadow: var(--shadow);
-  }
-  .stat-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--text3); margin-bottom: 6px; }
-  .stat-value { font-size: 28px; font-weight: 700; line-height: 1; }
-  .c-blauw  { color: var(--accent); }
-  .c-oranje { color: var(--orange); }
-  .c-geel   { color: var(--yellow); }
-  .c-groen  { color: var(--green); }
-  .c-boot   { color: #0369a1; }
-  .c-aqs    { color: #7c3aed; }
-
-  /* Filters */
-  .filters { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; flex-wrap: wrap; }
-  .filter-btn {
-    padding: 5px 14px; border-radius: 20px; border: 1px solid var(--border2);
-    background: var(--white); color: var(--text2); font-family: 'Inter', sans-serif;
-    font-size: 12px; font-weight: 500; cursor: pointer; transition: all .15s;
-  }
-  .filter-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .filter-btn.active { border-color: var(--accent); color: var(--accent); background: var(--accent-lt); font-weight: 600; }
-  .filter-divider { width: 1px; height: 22px; background: var(--border2); margin: 0 2px; }
-  .search-wrap { margin-left: auto; position: relative; }
-  .search-wrap input {
-    background: var(--white); border: 1px solid var(--border2); color: var(--text);
-    font-family: 'Inter', sans-serif; font-size: 13px; padding: 7px 12px 7px 34px;
-    border-radius: 20px; outline: none; width: 210px; transition: all .15s;
-  }
-  .search-wrap input:focus { border-color: var(--accent); width: 260px; }
-  .search-icon { position: absolute; left: 11px; top: 50%; transform: translateY(-50%); color: var(--text3); pointer-events: none; }
-
-  /* Sectie headers (Boottotaal / AQS) */
-  .sectie-header {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 16px; margin-bottom: 0;
-    border-radius: var(--radius) var(--radius) 0 0;
-    font-size: 14px; font-weight: 700;
-  }
-  .sectie-header.boottotaal { background: #0369a1; color: #fff; }
-  .sectie-header.aqs        { background: #7c3aed; color: #fff; margin-top: 28px; }
-  .sectie-count {
-    background: rgba(255,255,255,.25); padding: 2px 10px;
-    border-radius: 20px; font-size: 12px; font-weight: 600;
-  }
-
-  /* Tabel */
-  .table-wrap { overflow-x: auto; border-radius: 0 0 var(--radius) var(--radius); border: 1px solid var(--border); border-top: none; background: var(--white); box-shadow: var(--shadow); margin-bottom: 0; }
-  table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-
-  /* Kolombreedte */
-  col.c-datum    { width: 155px; }
-  col.c-ref      { width: 120px; }
-  col.c-klant    { width: 180px; }
-  col.c-product  { width: auto; }
-  col.c-qty      { width: 70px; }
-  col.c-status   { width: 210px; }
-
-  thead { background: #f8fafc; border-bottom: 2px solid var(--border); }
-  thead th {
-    padding: 10px 12px; text-align: left; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .05em; color: var(--text3);
-    white-space: nowrap; user-select: none; cursor: pointer; overflow: hidden;
-  }
-  thead th.num { text-align: right; }
-  thead th:hover { color: var(--text2); }
-  thead th.sorted { color: var(--accent); }
-  thead th .sort-icon { margin-left: 3px; opacity: .4; }
-  thead th.sorted .sort-icon { opacity: 1; }
-
-  /* Rijen */
-  tbody tr.order-row { border-bottom: 2px solid var(--border2); }
-  tbody tr.order-row.rij-te-laat { background: #fff5f5; }
-  tbody tr.order-row.rij-te-laat:hover { background: #ffe4e4; }
-  tbody tr.order-row:hover { background: #f8fafc; }
-  tbody tr.order-row.rij-te-laat td:first-child { border-left: 3px solid var(--red); }
-
-  /* Productrijen binnen order */
-  tbody tr.prod-rij td { padding: 0; border: none; }
-  tbody tr.order-row td { padding: 0; vertical-align: top; border: none; }
-
-  /* Cel wrappers */
-  .cel-datum   { padding: 12px 12px; }
-  .cel-ref     { padding: 12px 12px; }
-  .cel-klant   { padding: 12px 12px; }
-  .cel-product { padding: 0; }
-  .cel-qty     { padding: 0; text-align: right; }
-  .cel-status  { padding: 0; }
-
-  /* Productregel */
-  .prod-regel {
-    display: grid;
-    grid-template-columns: 1fr 70px 70px 220px;
-    border-bottom: 1px dashed var(--border);
-    min-height: 44px;
-  }
-  .prod-regel:last-child { border-bottom: none; }
-  .prod-regel.deellevering { opacity: .55; }
-
-  .prod-cel         { padding: 10px 12px; display: flex; flex-direction: column; justify-content: center; }
-  .prod-cel.num     { text-align: right; font-weight: 600; font-size: 13px; }
-  .prod-cel.num.bo  { color: var(--orange); }
-  .prod-name        { font-weight: 500; font-size: 13px; }
-  .prod-code        { font-size: 11px; color: var(--text3); margin-top: 2px; }
-  .prod-deellev     { font-size: 10px; color: var(--accent); margin-top: 2px; font-weight: 500; }
-
-  /* Datum cel */
-  .date-main { font-weight: 500; font-size: 13px; }
-  .date-age  { font-size: 11px; font-weight: 500; margin-top: 4px; padding: 2px 8px; border-radius: 10px; display: inline-block; }
-  .age-ok    { background: var(--green-lt);  color: var(--green); }
-  .age-warn  { background: var(--yellow-lt); color: var(--yellow); }
-  .age-crit  { background: var(--red-lt);    color: var(--red); }
-  .te-laat-label { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; display: inline-block; margin-top: 5px; }
-  .te-laat-op-tijd { background: var(--green-lt);  color: var(--green); }
-  .te-laat-bijna   { background: var(--yellow-lt); color: var(--yellow); }
-  .te-laat-te-laat { background: var(--red-lt);    color: var(--red); }
-  .belofte-tekst   { font-size: 10px; color: var(--text3); margin-top: 3px; }
-
-  /* Referentie */
-  .ref-link { font-weight: 600; color: var(--accent); text-decoration: none; font-size: 13px; }
-  .ref-link:hover { text-decoration: underline; }
-
-  /* Merk badge */
-  .brand-badge { display: inline-block; padding: 3px 9px; border-radius: 5px; font-size: 11px; font-weight: 600; margin-top: 4px; }
-  .brand-boottotaal { background: #e0f2fe; color: #0369a1; }
-  .brand-aqs        { background: #ede9fe; color: #7c3aed; }
-
-  /* Klant */
-  .cust-name    { font-weight: 500; font-size: 13px; }
-  .cust-comment { margin-top: 6px; }
-  .opmerking-regel { font-size: 11px; color: var(--text2); padding: 3px 0; border-bottom: 1px dashed var(--border); line-height: 1.4; }
-  .opmerking-regel:last-child { border-bottom: none; }
-  .opmerking-meta { font-size: 10px; color: var(--text3); font-weight: 600; margin-bottom: 1px; }
-  .opmerking-tekst { color: var(--text); }
-
-  /* Mail knop */
-  .mail-btn {
-    margin-top: 8px; padding: 5px 10px; border-radius: 5px; border: 1px solid var(--border2);
-    background: var(--white); color: var(--accent); font-family: 'Inter', sans-serif;
-    font-size: 11px; font-weight: 600; cursor: pointer; transition: all .15s;
-    display: inline-flex; align-items: center; gap: 5px;
-  }
-  .mail-btn:hover { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .mail-btn-groen { color: var(--green); border-color: #bbf7d0; }
-  .mail-btn-groen:hover { background: var(--green); color: #fff; border-color: var(--green); }
-
-  /* Status badge */
-  .badge {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 3px 9px; border-radius: 20px; font-size: 11px; font-weight: 500; white-space: nowrap;
-  }
-  .badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-  .badge.niet-ingekocht { background: var(--red-lt);    color: var(--red);    border: 1px solid #fecaca; }
-  .badge.niet-ingekocht::before { background: var(--red); }
-  .badge.besteld        { background: var(--yellow-lt); color: var(--yellow); border: 1px solid #fde68a; }
-  .badge.besteld::before { background: var(--yellow); }
-  .badge.op-voorraad    { background: var(--green-lt);  color: var(--green);  border: 1px solid #bbf7d0; }
-  .badge.op-voorraad::before { background: var(--green); }
-  .badge.verzonden      { background: var(--accent-lt); color: var(--accent); border: 1px solid #bfdbfe; }
-  .badge.verzonden::before { background: var(--accent); }
-  .badge.deellevering   { background: #f0f9ff; color: #0369a1; border: 1px solid #bae6fd; opacity: .8; }
-  .badge.deellevering::before { background: #0369a1; }
-
-  .leverdatum   { font-size: 11px; color: var(--text3); margin-top: 3px; }
-  .po-opmerking {
-    font-size: 11px; color: #6d28d9; margin-top: 4px; font-style: italic;
-    padding: 3px 8px; border-radius: 4px; line-height: 1.4;
-    background: #ede9fe; border-left: 2px solid #a78bfa;
-  }
-
-  /* Lege/laad/fout staat */
-  .state-box { background: var(--white); border: 1px solid var(--border); border-radius: var(--radius); padding: 60px 20px; text-align: center; color: var(--text3); box-shadow: var(--shadow); }
-  .spinner {
-    display: inline-block; width: 24px; height: 24px;
-    border: 2px solid var(--border2); border-top-color: var(--accent);
-    border-radius: 50%; animation: spin .7s linear infinite; margin-bottom: 12px;
-  }
-  @keyframes spin { to { transform: rotate(360deg); } }
-  .error-msg { color: var(--red); font-weight: 600; margin-bottom: 8px; font-size: 14px; }
-  .error-sub { font-size: 12px; color: var(--text3); }
-  .footer { margin-top: 12px; text-align: right; font-size: 11px; color: var(--text3); }
+  body { background: #f1f5f9; font-family: 'Inter', sans-serif; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+  .card { background: #fff; border-radius: 12px; padding: 40px; width: 360px; box-shadow: 0 4px 20px rgba(0,0,0,.08); }
+  .logo { width: 48px; height: 48px; background: #2563eb; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 24px; margin: 0 auto 20px; }
+  h1 { font-size: 20px; font-weight: 700; text-align: center; margin-bottom: 6px; color: #1e293b; }
+  .subtitle { font-size: 13px; color: #94a3b8; text-align: center; margin-bottom: 28px; }
+  label { display: block; font-size: 11px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 5px; }
+  input { width: 100%; padding: 10px 14px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 14px; outline: none; margin-bottom: 16px; transition: border-color .15s; }
+  input:focus { border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,.1); }
+  button { width: 100%; padding: 11px; background: #2563eb; color: #fff; border: none; border-radius: 6px; font-family: 'Inter', sans-serif; font-size: 14px; font-weight: 600; cursor: pointer; transition: background .15s; }
+  button:hover { background: #1d4ed8; }
+  .error { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; border-radius: 6px; padding: 10px 14px; font-size: 13px; margin-bottom: 16px; }
 </style>
 </head>
 <body>
-<div class="wrap">
-
-  <!-- Header -->
-  <header>
-    <div class="brand-hdr">
-      <div class="logo-box">📦</div>
-      <div>
-        <h1>Backorder Dashboard</h1>
-        <div class="subtitle">Verbonden met Picqer WMS</div>
-      </div>
-    </div>
-    <button class="btn btn-secondary" onclick="loadData()">↻ Vernieuwen</button>
-    <div id="refresh-countdown" style="font-size:12px;color:var(--text3);"></div>
-  </header>
-
-  <!-- Instellingen -->
-  <div class="config">
-    <div class="field">
-      <label>Picqer Subdomein</label>
-      <input type="text" id="subdomain" placeholder="jouwbedrijf" />
-    </div>
-    <div class="field">
-      <label>API Sleutel</label>
-      <input type="password" id="apikey" class="wide" placeholder="jouw-api-sleutel" />
-    </div>
-    <button class="btn btn-primary" onclick="loadData()">Backorders laden</button>
-  </div>
-
-  <!-- Statistieken -->
-  <div class="stats">
-    <div class="stat"><div class="stat-label">Totaal</div><div class="stat-value c-blauw" id="stat-totaal">—</div></div>
-    <div class="stat"><div class="stat-label">Boottotaal</div><div class="stat-value c-boot" id="stat-boottotaal">—</div></div>
-    <div class="stat"><div class="stat-label">AQS</div><div class="stat-value c-aqs" id="stat-aqs">—</div></div>
-    <div class="stat"><div class="stat-label">Niet ingekocht</div><div class="stat-value c-oranje" id="stat-niet-ingekocht">—</div></div>
-    <div class="stat"><div class="stat-label">Ingekocht</div><div class="stat-value c-geel" id="stat-besteld">—</div></div>
-    <div class="stat"><div class="stat-label">Op voorraad / Verzonden</div><div class="stat-value c-groen" id="stat-klaar">—</div></div>
-  </div>
-
-  <!-- Filters -->
-  <div class="filters">
-    <div style="display:flex;gap:6px;align-items:center;">
-      <button class="filter-btn brand-filter active" onclick="setBrandFilter('all',this)">Alle merken</button>
-      <button class="filter-btn brand-filter" onclick="setBrandFilter('boottotaal',this)">Boottotaal</button>
-      <button class="filter-btn brand-filter" onclick="setBrandFilter('aqs',this)">AQS</button>
-    </div>
-    <div class="filter-divider"></div>
-    <div style="display:flex;gap:6px;align-items:center;">
-      <button class="filter-btn status-filter active" onclick="setFilter('all',this)">Alle statussen</button>
-      <button class="filter-btn status-filter" onclick="setFilter('niet-ingekocht',this)">Niet ingekocht</button>
-      <button class="filter-btn status-filter" onclick="setFilter('besteld',this)">Ingekocht</button>
-      <button class="filter-btn status-filter" onclick="setFilter('op-voorraad',this)">Op voorraad</button>
-      <button class="filter-btn status-filter" onclick="setFilter('verzonden',this)">Verzonden</button>
-    </div>
-    <div class="search-wrap">
-      <span class="search-icon">⌕</span>
-      <input type="text" id="zoeken" placeholder="Zoek op referentie of klant…" oninput="renderTabel()" />
-    </div>
-  </div>
-
-  <!-- Tabellen per merk -->
-  <div id="dashboard-inhoud">
-    <div class="state-box">Vul je Picqer gegevens in en klik op <strong>Backorders laden</strong>.</div>
-  </div>
-
-  <div class="footer" id="laatste-refresh"></div>
+<div class="card">
+  <div class="logo">📦</div>
+  <h1>Backorder Dashboard</h1>
+  <div class="subtitle">Log in om door te gaan</div>
+  {% if error %}<div class="error">{{ error }}</div>{% endif %}
+  <form method="POST">
+    <label>Gebruikersnaam</label>
+    <input type="text" name="username" placeholder="jouw naam" autocomplete="username" required>
+    <label>Wachtwoord</label>
+    <input type="password" name="password" placeholder="••••••••" autocomplete="current-password" required>
+    <button type="submit">Inloggen</button>
+  </form>
 </div>
-
-<script>
-let alleRijen    = [];
-let activFilter  = 'all';
-let activMerk    = 'all';
-let sortSleutel  = 'datum';
-let sortRichting = -1;
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-function detecteerMerk(ref) {
-  const r = (ref || '').toUpperCase();
-  if (r.startsWith('NL') || r.startsWith('B')) return 'boottotaal';
-  return 'aqs';
-}
-
-function werkdagenTussen(van, tot) {
-  let teller = 0;
-  const d = new Date(van); d.setHours(0,0,0,0);
-  const e = new Date(tot); e.setHours(0,0,0,0);
-  while (d < e) {
-    d.setDate(d.getDate() + 1);
-    const dag = d.getDay();
-    if (dag !== 0 && dag !== 6) teller++;
-  }
-  return teller;
-}
-
-function leverbelofte(merk) { return merk === 'boottotaal' ? 3 : 7; }
-
-function teLaatInfo(datumStr, merk) {
-  const werkdagen = werkdagenTussen(new Date(datumStr), new Date());
-  const belofte   = leverbelofte(merk);
-  return { werkdagen, belofte, verschil: werkdagen - belofte };
-}
-
-function leeftijdLabel(datumStr) {
-  const d = Math.floor((Date.now() - new Date(datumStr).getTime()) / 86400000);
-  if (d < 1)   return { tekst: 'vandaag',    cls: 'age-ok' };
-  if (d === 1) return { tekst: '1 dag',      cls: 'age-ok' };
-  if (d <= 7)  return { tekst: `${d} dagen`, cls: 'age-warn' };
-  if (d <= 30) return { tekst: `${d} dagen`, cls: 'age-warn' };
-  return               { tekst: `${d} dagen`, cls: 'age-crit' };
-}
-
-function fmtDatum(str) {
-  if (!str) return '—';
-  return new Date(str).toLocaleDateString('nl-NL', { day: '2-digit', month: 'short', year: 'numeric' });
-}
-
-// Statusvolgorde: lagere waarde = problematischer = bovenaan
-const STATUS_VOLGORDE = { 'niet-ingekocht': 0, 'besteld': 1, 'op-voorraad': 2, 'deellevering': 3, 'verzonden': 4 };
-
-function statusInfo(status) {
-  return ({
-    'niet-ingekocht': { label: 'Niet ingekocht', cls: 'niet-ingekocht' },
-    'besteld':        { label: 'Ingekocht',       cls: 'besteld' },
-    'op-voorraad':    { label: 'Op voorraad',     cls: 'op-voorraad' },
-    'deellevering':   { label: 'Deellevering',    cls: 'deellevering' },
-    'verzonden':      { label: 'Verzonden',        cls: 'verzonden' },
-  })[status] || { label: 'Niet ingekocht', cls: 'niet-ingekocht' };
-}
-
-function esc(str) {
-  return String(str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ── API ───────────────────────────────────────────────────────────────────────
-async function picqerGet(pad) {
-  const headers = {};
-  // Lokaal: stuur Authorization header mee
-  // Op Render: proxy gebruikt server-side API key
-  if (PICQER_API_KEY && PICQER_API_KEY !== 'server') {
-    headers['Authorization'] = 'Basic ' + btoa(PICQER_API_KEY + ':x');
-  }
-  const resp = await fetch(`/picqer/${PICQER_SUBDOMAIN}${pad}`, { headers });
-  if (!resp.ok) {
-    const txt = await resp.text().catch(() => '');
-    throw new Error(`Picqer API fout ${resp.status}: ${txt.slice(0,200)}`);
-  }
-  return resp.json();
-}
-
-// Subdomain en API key — worden ingevuld vanuit config of input velden
-let PICQER_SUBDOMAIN = document.getElementById('subdomain')?.value?.trim() || '';
-let PICQER_API_KEY   = document.getElementById('apikey')?.value?.trim() || '';
-
-async function picqerAlles(pad) {
-  let resultaten = [], offset = 0;
-  while (true) {
-    const sep  = pad.includes('?') ? '&' : '?';
-    const page = await picqerGet(`${pad}${sep}offset=${offset}`);
-    resultaten = resultaten.concat(page);
-    if (page.length < 100) break;
-    offset += 100;
-  }
-  return resultaten;
-}
-
-// ── Data laden ────────────────────────────────────────────────────────────────
-async function loadData() {
-  // Haal subdomain op — API key niet nodig op Render (server regelt dat)
-  PICQER_SUBDOMAIN = document.getElementById('subdomain')?.value?.trim() || PICQER_SUBDOMAIN;
-  PICQER_API_KEY   = document.getElementById('apikey')?.value?.trim()    || PICQER_API_KEY || 'server';
-  if (!PICQER_SUBDOMAIN) {
-    document.getElementById('dashboard-inhoud').innerHTML =
-      `<div class="state-box"><div class="error-msg">⚠ Vul je subdomein in.</div></div>`;
-    return;
-  }
-  laadStatus();
-  try {
-    // 1. Backorders
-    const backorders = await picqerAlles('/backorders');
-    const orderMap = {};
-    for (const bo of backorders) {
-      if (!orderMap[bo.idorder]) orderMap[bo.idorder] = [];
-      orderMap[bo.idorder].push(bo);
-    }
-
-    // 2. Orderdetails
-    const orderIds  = Object.keys(orderMap);
-    const orderData = {};
-    for (let i = 0; i < orderIds.length; i += 10) {
-      const batch   = orderIds.slice(i, i + 10);
-      const results = await Promise.all(batch.map(id => picqerGet(`/orders/${id}`).catch(() => null)));
-      batch.forEach((id, j) => { if (results[j]) orderData[id] = results[j]; });
-    }
-
-    // 2b. Order comments ophalen voor alle orders (gebatcht per 5)
-    const orderComments = {};
-    let eersteCommentGelogd = false;
-    for (let i = 0; i < orderIds.length; i += 5) {
-      const batch = orderIds.slice(i, i + 5);
-      const results = await Promise.all(batch.map(id =>
-        picqerGet(`/orders/${id}/comments`).catch(() => [])
-      ));
-      batch.forEach((id, j) => {
-        const comments = Array.isArray(results[j]) ? results[j] : [];
-        if (!eersteCommentGelogd && comments.length > 0) {
-          console.log('=== Comment object velden ===', Object.keys(comments[0]));
-          console.log('=== Comment object inhoud ===', comments[0]);
-          eersteCommentGelogd = true;
-        }
-        if (comments.length > 0) {
-          comments.sort((a, b) => new Date(a.created || a.created_at) - new Date(b.created || b.created_at));
-          orderComments[id] = comments.map(c => {
-            const tekst  = c.body || c.comment || c.message || c.text || '';
-            const auteur = c.author?.full_name || c.author?.username || c.username || c.user || '';
-            const datRaw = c.created || c.created_at || '';
-            const datum  = datRaw ? fmtDatum(datRaw.split(' ')[0]) : '';
-            return { tekst, auteur, datum };
-          }).filter(c => c.tekst);
-        }
-      });
-    }
-
-    // 3. Inkooporders ophalen voor leverdatum + opmerkingen
-    let inkoopOrders = [];
-    try { inkoopOrders = await picqerAlles('/purchaseorders?status=purchased'); } catch(e) {}
-
-    // Haal volledige PO details op voor de opmerkingen (apart endpoint)
-    const productIO = {};
-    for (const io of inkoopOrders) {
-      // remarks = PO nummer (bijv. "PO-06739"), NIET de opmerking
-      // De echte opmerking zit in de volledige PO details onder 'comment_count' > 0
-      // We gebruiken purchaseorderid als referentie en halen comments apart op indien aanwezig
-      let ioOpmerking = [];
-      if (io.comment_count > 0) {
-        try {
-          const poDetails = await picqerGet(`/purchaseorders/${io.idpurchaseorder}/comments`);
-          if (Array.isArray(poDetails) && poDetails.length > 0) {
-            poDetails.sort((a, b) => new Date(a.created || a.created_at) - new Date(b.created || b.created_at));
-            ioOpmerking = poDetails.map(c => {
-              const tekst  = c.body || c.comment || c.message || c.text || '';
-              const auteur = c.author?.full_name || c.author?.username || c.username || c.user || '';
-              const datRaw = c.created_at || c.created || '';
-              const datum  = datRaw ? fmtDatum(datRaw.split(' ')[0]) : '';
-              return { tekst, auteur, datum };
-            }).filter(c => c.tekst);
-          }
-        } catch(e) {}
-      }
-      for (const prod of (io.products || [])) {
-        const bestaand = productIO[prod.idproduct];
-        if (!bestaand || (io.delivery_date && io.delivery_date < bestaand.leverdatum)) {
-          productIO[prod.idproduct] = {
-            leverdatum:  io.delivery_date,
-            opmerking:   ioOpmerking,
-            ionummer:    io.purchaseorderid || '',
-          };
-        }
-      }
-    }
-
-    // 4. Rijen bouwen — volledige order, niet alleen backorder producten
-    alleRijen = orderIds.map(orderId => {
-      const bos   = orderMap[orderId];
-      const order = orderData[orderId] || {};
-      const ref   = order.reference || order.orderid || `#${orderId}`;
-
-      // Maak een map van backorder producten
-      const boMap = {};
-      for (const bo of bos) boMap[bo.idproduct] = bo;
-
-      // Opmerking: customer_remarks OF interne comments (array van objecten)
-      const opmerking = order.customer_remarks
-        ? [{ tekst: order.customer_remarks, auteur: '', datum: '' }]
-        : (orderComments[orderId] || []);
-
-      // Loop over ALLE producten op de order
-      const producten = (order.products || []).map(regel => {
-        const bo        = boMap[regel.idproduct];
-        const io        = productIO[regel.idproduct];
-        const verkocht  = regel.amount           || 0;
-        const verzonden = regel.amount_delivered || 0;
-        const boAantal  = bo ? bo.amount : 0;
-        const isBO      = !!bo;
-
-        // PO opmerking: uit de inkooporder OF uit de productregel zelf
-        const ioOpmerking = io?.opmerking || regel.remarks || regel.opmerking || '';
-
-        // Status bepalen
-        let status;
-        if (!isBO) {
-          status = verzonden >= verkocht ? 'verzonden' : 'deellevering';
-        } else {
-          status = 'niet-ingekocht';
-          if (io) status = 'besteld';
-          if ((bo?.amountavailable || bo?.amount_available || 0) >= boAantal) status = 'op-voorraad';
-          if (verzonden >= verkocht && verkocht > 0) status = 'verzonden';
-        }
-
-        return {
-          naam:        regel.name        || `Product #${regel.idproduct}`,
-          code:        regel.productcode || '',
-          verkocht,
-          verzonden,
-          bo:          boAantal,
-          isBO,
-          status,
-          leverdatum:  (status === 'verzonden' || status === 'deellevering') ? null : (io?.leverdatum || null),
-          verzendDatum: regel.deliverydate || regel.shipped_at || regel.delivered_at || null,
-          ioOpmerking,
-        };
-      });
-
-      // Sorteer: probleem producten bovenaan (op statusvolgorde)
-      producten.sort((a, b) => (STATUS_VOLGORDE[a.status] || 99) - (STATUS_VOLGORDE[b.status] || 99));
-
-      const totaalVerkocht  = producten.reduce((s,p) => s + p.verkocht,  0);
-      const totaalVerzonden = producten.reduce((s,p) => s + p.verzonden, 0);
-      const totaalBO        = producten.filter(p => p.isBO).reduce((s,p) => s + p.bo, 0);
-
-      // Overkoepelende status
-      const statussen = producten.filter(p => p.isBO).map(p => p.status);
-      let overallStatus = 'verzonden';
-      if (statussen.includes('niet-ingekocht'))  overallStatus = 'niet-ingekocht';
-      else if (statussen.includes('besteld'))     overallStatus = 'besteld';
-      else if (statussen.includes('op-voorraad')) overallStatus = 'op-voorraad';
-
-      return {
-        idorder: orderId,
-        datum:   order.created || bos[0]?.created_at || '',
-        ref,
-        picqerUrl:  `https://${PICQER_SUBDOMAIN}.picqer.com/orders/${orderId}`,
-        merk:       detecteerMerk(ref),
-        klant:      order.deliveryname || order.relname || order.customer?.name || '—',
-        email:      order.emailaddress || order.email || '',
-        opmerking,
-        producten,
-        totaalVerkocht, totaalVerzonden, totaalBO,
-        status: overallStatus,
-      };
-    });
-
-    updateStats();
-    renderTabel();
-    const nu = new Date().toLocaleTimeString('nl-NL');
-    document.getElementById('laatste-refresh').textContent = 'Laatste update: ' + nu;
-
-    // Sla data op in cache
-    try {
-      localStorage.setItem('bo_cache', JSON.stringify(alleRijen));
-      localStorage.setItem('bo_cache_tijd', new Date().toISOString());
-    } catch(e) {}
-
-  } catch(err) {
-    // Bij fout: toon cache als die beschikbaar is
-    const cache = localStorage.getItem('bo_cache');
-    if (cache && alleRijen.length === 0) {
-      try {
-        alleRijen = JSON.parse(cache);
-        updateStats();
-        renderTabel();
-        const cacheTijd = localStorage.getItem('bo_cache_tijd');
-        const tijdLabel = cacheTijd ? fmtDatum(cacheTijd.split('T')[0]) : '?';
-        document.getElementById('laatste-refresh').textContent =
-          '⚠ Geen verbinding — cache van ' + tijdLabel;
-        return;
-      } catch(e2) {}
-    }
-    document.getElementById('dashboard-inhoud').innerHTML = `
-      <div class="state-box">
-        <div class="error-msg">⚠ ${esc(err.message)}</div>
-        <div class="error-sub">Controleer je subdomein en API sleutel. Zorg dat proxy.py actief is.</div>
-      </div>`;
-  }
-}
-
-// ── Stats ─────────────────────────────────────────────────────────────────────
-function updateStats() {
-  document.getElementById('stat-totaal').textContent         = alleRijen.length;
-  document.getElementById('stat-boottotaal').textContent     = alleRijen.filter(r => r.merk === 'boottotaal').length;
-  document.getElementById('stat-aqs').textContent            = alleRijen.filter(r => r.merk === 'aqs').length;
-  document.getElementById('stat-niet-ingekocht').textContent = alleRijen.filter(r => r.status === 'niet-ingekocht').length;
-  document.getElementById('stat-besteld').textContent        = alleRijen.filter(r => r.status === 'besteld').length;
-  document.getElementById('stat-klaar').textContent          = alleRijen.filter(r => r.status === 'op-voorraad' || r.status === 'verzonden').length;
-}
-
-// ── Filters ───────────────────────────────────────────────────────────────────
-function setFilter(f, btn) {
-  activFilter = f;
-  document.querySelectorAll('.status-filter').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderTabel();
-}
-
-function setBrandFilter(m, btn) {
-  activMerk = m;
-  document.querySelectorAll('.brand-filter').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  renderTabel();
-}
-
-// ── Render ────────────────────────────────────────────────────────────────────
-function renderTabel() {
-  const q = document.getElementById('zoeken').value.toLowerCase();
-  const inhoud = document.getElementById('dashboard-inhoud');
-
-  let rijen = alleRijen.filter(r => {
-    if (activMerk   !== 'all' && r.merk !== activMerk) return false;
-    if (activFilter !== 'all' && !r.producten.some(p => p.status === activFilter)) return false;
-    if (q && !r.ref.toLowerCase().includes(q) && !r.klant.toLowerCase().includes(q)) return false;
-    return true;
-  });
-
-  if (rijen.length === 0) {
-    inhoud.innerHTML = `<div class="state-box">Geen backorders gevonden voor deze filter.</div>`;
-    return;
-  }
-
-  // Splits in twee merken
-  const merken = [
-    { key: 'boottotaal', label: 'Boottotaal' },
-    { key: 'aqs',        label: 'AQS' },
-  ];
-
-  inhoud.innerHTML = merken.map(({ key, label }) => {
-    const merkRijen = rijen
-      .filter(r => r.merk === key)
-      .sort((a, b) => new Date(a.datum) - new Date(b.datum)); // oudste bovenaan
-
-    if (merkRijen.length === 0) return '';
-
-    const tabelRijen = merkRijen.map(rij => {
-      const tl  = teLaatInfo(rij.datum, rij.merk);
-
-      let teLaatHtml;
-      if (tl.verschil < 0) {
-        const over = tl.belofte - tl.werkdagen;
-        teLaatHtml = `<div class="te-laat-label te-laat-op-tijd">✓ Nog ${over} werkdag${over===1?'':'en'}</div>`;
-      } else if (tl.verschil === 0) {
-        teLaatHtml = `<div class="te-laat-label te-laat-bijna">⚠ Laatste dag</div>`;
-      } else {
-        teLaatHtml = `<div class="te-laat-label te-laat-te-laat">✕ ${tl.verschil} werkdag${tl.verschil===1?'':'en'} te laat</div>`;
-      }
-
-      const rijClass = tl.verschil >= 3 ? 'order-row rij-te-laat' : 'order-row';
-
-      // Productrijen als grid
-      const prodRegels = rij.producten.map(p => {
-        const si = statusInfo(p.status);
-        const isDeelLev = !p.isBO && p.verzonden > 0 && p.verzonden < p.verkocht;
-        const deellevTekst = isDeelLev
-          ? `<div class="prod-deellev">Deellevering: ${p.verzonden}/${p.verkocht} verzonden</div>` : '';
-        const verzondenDatumHtml = (p.status === 'verzonden' || p.status === 'deellevering') && p.verzendDatum
-          ? `<div class="leverdatum">📤 ${fmtDatum(p.verzendDatum)}</div>` : '';
-        const poOpmHtml = Array.isArray(p.ioOpmerking) && p.ioOpmerking.length > 0
-          ? p.ioOpmerking.map(o => `<div class="opmerking-regel">
-              ${o.auteur || o.datum ? `<div class="opmerking-meta">${[o.auteur, o.datum].filter(Boolean).join(' · ')}</div>` : ''}
-              <div class="opmerking-tekst">${esc(o.tekst)}</div>
-            </div>`).join('') : '';
-
-        return `<div class="prod-regel${!p.isBO ? ' deellevering' : ''}">
-          <div class="prod-cel">
-            <div class="prod-name">${esc(p.naam)}</div>
-            ${p.code ? `<div class="prod-code">${esc(p.code)}</div>` : ''}
-            ${deellevTekst}
-          </div>
-          <div class="prod-cel num">${p.verkocht}</div>
-          <div class="prod-cel num bo">${p.isBO ? p.bo : '—'}</div>
-          <div class="prod-cel">
-            <span class="badge ${si.cls}">${si.label}</span>
-            ${p.leverdatum ? `<div class="leverdatum">📦 ${fmtDatum(p.leverdatum)}</div>` : ''}
-            ${verzondenDatumHtml}
-            ${poOpmHtml}
-          </div>
-        </div>`;
-      }).join('');
-
-      // Opmerkingen HTML
-      const opmHtml = rij.opmerking.length > 0
-        ? `<div class="cust-comment">${rij.opmerking.map(o => `
-            <div class="opmerking-regel">
-              ${o.auteur || o.datum ? `<div class="opmerking-meta">${[o.auteur, o.datum].filter(Boolean).join(' · ')}</div>` : ''}
-              <div class="opmerking-tekst">${esc(o.tekst)}</div>
-            </div>`).join('')}</div>` : '';
-
-      // Mail knop
-      const vanEmail     = rij.merk === 'boottotaal' ? 'info@boottotaal.nl' : 'verkoop@aquaservice.nl';
-      const handtekening = rij.merk === 'boottotaal'
-        ? `Met vriendelijke groet,\nTeam Boottotaal\ninfo@boottotaal.nl`
-        : `Met vriendelijke groet,\nTeam AQS\nverkoop@aquaservice.nl`;
-
-      const boProducten = rij.producten
-        .filter(p => p.isBO && p.status !== 'verzonden' && p.status !== 'op-voorraad')
-        .map(p => `- ${p.naam} (${p.bo} stuks)`)
-        .join('\n');
-
-      const leverdatums = rij.producten
-        .filter(p => p.isBO && p.status !== 'verzonden' && p.status !== 'op-voorraad' && p.leverdatum)
-        .map(p => fmtDatum(p.leverdatum));
-      const leverInfo = leverdatums.length > 0
-        ? `We verwachten de artikelen rond ${leverdatums[0]} te ontvangen.`
-        : `We houden je op de hoogte zodra we meer weten over de levertijd.`;
-
-      // Alle producten voor in de mail
-      const alleProductenMail = rij.producten
-        .filter(p => p.isBO)
-        .map(p => {
-          if (p.status === 'niet-ingekocht') {
-            return `- ${p.naam} (${p.bo} stuks) — ✗ momenteel niet op voorraad`;
-          } else if (p.status === 'besteld') {
-            let datumTekst = '';
-            if (p.leverdatum) {
-              // +1 dag verwerkingstijd
-              const d = new Date(p.leverdatum);
-              d.setDate(d.getDate() + 1);
-              datumTekst = `, verwacht bij jou: ${fmtDatum(d.toISOString().split('T')[0])}`;
-            }
-            return `- ${p.naam} (${p.bo} stuks) — ✗ niet op voorraad${datumTekst}`;
-          } else {
-            return `- ${p.naam} (${p.bo} stuks) — ✓ beschikbaar`;
-          }
-        })
-        .join('\n');
-
-      const mailOnderwerp = encodeURIComponent(`Update bestelling ${rij.ref}`);
-      const mailTekst = encodeURIComponent(
-        `Beste ${rij.klant},\n\n` +
-        `We hebben een vraag over je bestelling ${rij.ref} van ${fmtDatum(rij.datum)}.\n\n` +
-        `Je bestelling bestaat uit de volgende artikelen:\n\n` +
-        `${alleProductenMail}\n\n` +
-        `Wat is jouw voorkeur?\n` +
-        `1. Wachten — we sturen alles in één keer zodra alles beschikbaar is\n` +
-        `2. Deellevering — we sturen alvast wat beschikbaar is, de rest volgt later\n\n` +
-        `${handtekening}`
-      );
-      const mailLink = `mailto:${rij.email}?subject=${mailOnderwerp}&body=${mailTekst}`;
-
-      return `<tr class="${rijClass}">
-        <td style="vertical-align:top;padding:10px 12px;min-width:150px;">
-          <a class="ref-link" href="${esc(rij.picqerUrl)}" target="_blank">${esc(rij.ref)}</a>
-          <div class="date-main" style="margin-top:3px;color:var(--text2);font-size:12px;">${fmtDatum(rij.datum)}</div>
-          ${teLaatHtml}
-          <div class="belofte-tekst">Belofte: ${tl.belofte} werkdagen</div>
-        </td>
-        <td style="vertical-align:top;padding:10px 12px;min-width:220px;max-width:280px;">
-          <div class="cust-name">${esc(rij.klant)}</div>
-          ${opmHtml}
-          <a href="${mailLink}" class="mail-btn" style="margin-top:8px;display:inline-flex;">✉ Mail klant</a>
-        </td>
-        <td colspan="4" style="padding:0;vertical-align:top;">
-          ${prodRegels}
-        </td>
-      </tr>`;
-    }).join('');
-
-    return `
-      <div class="sectie-header ${key}">
-        ${label}
-        <span class="sectie-count">${merkRijen.length} order${merkRijen.length===1?'':'s'}</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <colgroup>
-            <col style="width:160px;">
-            <col style="width:240px;">
-            <col>
-            <col style="width:70px;">
-            <col style="width:70px;">
-            <col style="width:220px;">
-          </colgroup>
-          <thead>
-            <tr>
-              <th>Datum / Referentie</th>
-              <th>Klant / Opmerkingen</th>
-              <th>Product</th>
-              <th class="num">Verk.</th>
-              <th class="num">BO</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody>${tabelRijen}</tbody>
-        </table>
-      </div>`;
-  }).join('');
-}
-
-function laadStatus() {
-  document.getElementById('dashboard-inhoud').innerHTML =
-    `<div class="state-box"><div class="spinner"></div><div>Backorders laden uit Picqer…</div></div>`;
-  ['stat-totaal','stat-boottotaal','stat-aqs','stat-niet-ingekocht','stat-besteld','stat-klaar']
-    .forEach(id => document.getElementById(id).textContent = '—');
-}
-
-// ── Auto-refresh elke 10 minuten ─────────────────────────────────────────────
-const REFRESH_INTERVAL = 10 * 60; // seconden
-let refreshTeller = REFRESH_INTERVAL;
-let refreshTimer  = null;
-
-function startRefreshCountdown() {
-  if (refreshTimer) clearInterval(refreshTimer);
-  refreshTeller = REFRESH_INTERVAL;
-  refreshTimer = setInterval(() => {
-    refreshTeller--;
-    const min = Math.floor(refreshTeller / 60);
-    const sec = refreshTeller % 60;
-    const el = document.getElementById('refresh-countdown');
-    if (el) el.textContent = `Volgende update over ${min}:${String(sec).padStart(2,'0')}`;
-    if (refreshTeller <= 0) {
-      loadData();
-    }
-  }, 1000);
-}
-
-// Wrap loadData om countdown te resetten
-const _origLoadData = loadData;
-window.loadData = async function() {
-  await _origLoadData();
-  startRefreshCountdown();
-};
-
-window.addEventListener('load', async () => {
-  // Lokale inloggegevens herstellen
-  const sub = localStorage.getItem('picqer_sub');
-  const key = localStorage.getItem('picqer_key');
-  if (sub) { document.getElementById('subdomain').value = sub; PICQER_SUBDOMAIN = sub; }
-  if (key) { document.getElementById('apikey').value   = key; PICQER_API_KEY   = key; }
-
-  // Laad cache meteen zodat je niet hoeft te wachten
-  try {
-    const cache     = localStorage.getItem('bo_cache');
-    const cacheTijd = localStorage.getItem('bo_cache_tijd');
-    if (cache) {
-      alleRijen = JSON.parse(cache);
-      updateStats();
-      renderTabel();
-      const tijdLabel = cacheTijd ? new Date(cacheTijd).toLocaleTimeString('nl-NL') : '?';
-      document.getElementById('laatste-refresh').textContent =
-        'Uit cache: ' + tijdLabel + ' — bezig met vernieuwen…';
-    }
-  } catch(e) {}
-
-  // Probeer config van server te halen (werkt op Render)
-  try {
-    const resp = await fetch('/config');
-    if (resp.ok) {
-      const cfg = await resp.json();
-      if (cfg.subdomain) {
-        PICQER_SUBDOMAIN = cfg.subdomain;
-        PICQER_API_KEY   = 'server';
-        // Verberg config panel en laad automatisch
-        document.querySelector('.config').style.display = 'none';
-        window.loadData();
-      }
-    }
-  } catch(e) {
-    // Lokaal draaien — config panel blijft zichtbaar
-  }
-});
-
-['subdomain','apikey'].forEach(id => {
-  document.getElementById(id).addEventListener('input', () => {
-    PICQER_SUBDOMAIN = document.getElementById('subdomain').value;
-    PICQER_API_KEY   = document.getElementById('apikey').value;
-    localStorage.setItem('picqer_sub', PICQER_SUBDOMAIN);
-    localStorage.setItem('picqer_key', PICQER_API_KEY);
-  });
-});
-</script>
 </body>
-</html>
+</html>"""
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    error = None
+    if request.method == 'POST':
+        username = request.form.get('username', '').lower().strip()
+        password = request.form.get('password', '')
+        if username in USERS and USERS[username] == password:
+            session['user'] = username
+            return redirect(url_for('dashboard'))
+        error = 'Gebruikersnaam of wachtwoord onjuist.'
+    return render_template_string(LOGIN_HTML, error=error)
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login'))
+
+@app.route('/')
+@login_required
+def dashboard():
+    html_path = os.path.join(os.path.dirname(__file__), 'picqer-backorders.html')
+    with open(html_path, 'r', encoding='utf-8') as f:
+        html = f.read()
+    html = html.replace('</body>', f'<script>window._user = "{session["user"]}";</script></body>')
+    return html
+
+@app.route('/picqer/<path:api_path>')
+@login_required
+def picqer_proxy(api_path):
+    subdomain = PICQER_SUBDOMAIN
+    if api_path.startswith(subdomain + '/'):
+        api_path = api_path[len(subdomain) + 1:]
+    url = f"https://{subdomain}.picqer.com/api/v1/{api_path}"
+    if request.query_string:
+        url += '?' + request.query_string.decode()
+    try:
+        resp = requests.get(
+            url,
+            auth=(PICQER_API_KEY, 'x'),
+            headers={'User-Agent': 'BackorderDashboard/1.0'},
+            timeout=30
+        )
+        return Response(resp.content, status=resp.status_code, content_type='application/json')
+    except Exception as e:
+        return jsonify({'error': str(e)}), 502
+
+@app.route('/keuze')
+def keuze():
+    order = request.args.get('order', '?')
+    keuze_val = request.args.get('keuze', '')
+    sub = request.args.get('sub', PICQER_SUBDOMAIN)
+    kleur = '#16a34a' if keuze_val == 'wachten' else '#2563eb'
+    label = 'Wachten op volledige levering' if keuze_val == 'wachten' else 'Deellevering gewenst'
+    icoon = '⏳' if keuze_val == 'wachten' else '📦'
+    team_email = 'info@boottotaal.nl' if 'boottotaal' in sub else 'verkoop@aquaservice.nl'
+    mail_onderwerp = urllib.parse.quote(f"Keuze bestelling {order} - {label}")
+    mail_tekst = urllib.parse.quote(f"Hallo,\n\nMijn keuze voor bestelling {order} is:\n\n➡ {label}\n\nMet vriendelijke groet")
+    mailto_link = f"mailto:{team_email}?subject={mail_onderwerp}&body={mail_tekst}"
+    html = f"""<!DOCTYPE html><html lang="nl"><head><meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Keuze bestelling {order}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body{{font-family:Inter,sans-serif;background:#f1f5f9;display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
+      .card{{background:#fff;border-radius:12px;padding:40px;max-width:480px;width:90%;box-shadow:0 4px 20px rgba(0,0,0,.08);text-align:center}}
+      h2{{font-size:22px;font-weight:700;margin-bottom:8px;color:#1e293b}}
+      .badge{{display:inline-block;padding:8px 20px;border-radius:20px;font-size:15px;font-weight:600;background:{kleur};color:#fff;margin:16px 0}}
+      p{{color:#475569;font-size:14px;line-height:1.6}}
+      .mail-btn{{display:inline-block;margin-top:20px;padding:12px 28px;background:{kleur};color:#fff;border-radius:8px;text-decoration:none;font-weight:600;font-size:14px;}}
+      .uitleg{{font-size:12px;color:#94a3b8;margin-top:12px;}}
+    </style>
+    <script>window.onload = function(){{ window.location.href = "{mailto_link}"; }}</script>
+    </head>
+    <body><div class="card">
+    <div style="font-size:48px;margin-bottom:16px;">{icoon}</div>
+    <h2>Bedankt voor je keuze!</h2>
+    <div class="badge">{label}</div>
+    <p>Je hebt gekozen voor <strong>{label}</strong> voor bestelling <strong>{order}</strong>.</p>
+    <p style="margin-top:12px;">Er wordt automatisch een bevestigingsmail geopend. Klik op <strong>Verzenden</strong> om je keuze door te geven.</p>
+    <a href="{mailto_link}" class="mail-btn">✉ Bevestig je keuze per mail</a>
+    <div class="uitleg">Werkt de mail niet automatisch? Klik dan op de knop hierboven.</div>
+    </div></body></html>"""
+    return html
+
+@app.route('/config')
+@login_required
+def config():
+    return jsonify({
+        'subdomain': PICQER_SUBDOMAIN,
+        'user': session['user']
+    })
+
+@app.route('/me')
+@login_required
+def me():
+    return jsonify({'user': session['user']})
+
+if __name__ == '__main__':
+    app.run(debug=False, host='0.0.0.0', port=int(os.environ.get('PORT', 3000)))
