@@ -8,6 +8,9 @@ from werkzeug.security import check_password_hash, generate_password_hash
 import requests
 import os
 import urllib.parse
+import threading
+import time
+import json
 from functools import wraps
 
 app = Flask(__name__)
@@ -23,6 +26,14 @@ USERS = {
     'tim':    os.environ.get('PASS_TIM',    'Welkom123!'),
     'joran':  os.environ.get('PASS_JORAN',  'Welkom123!'),
 }
+
+# ── Server-side cache ─────────────────────────────────────────────────────────
+cache = {
+    'data': None,
+    'timestamp': None,
+    'loading': False
+}
+CACHE_TTL = 10 * 60  # 10 minuten
 
 def login_required(f):
     @wraps(f)
@@ -71,6 +82,131 @@ LOGIN_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
+def picqer_api_get(path):
+    """Directe Picqer API call vanaf de server"""
+    url = f"https://{PICQER_SUBDOMAIN}.picqer.com/api/v1{path}"
+    resp = requests.get(
+        url,
+        auth=(PICQER_API_KEY, 'x'),
+        headers={'User-Agent': 'BackorderDashboard/1.0'},
+        timeout=60
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+def picqer_api_get_all(path):
+    """Pagineer door alle resultaten"""
+    results = []
+    offset = 0
+    while True:
+        sep = '&' if '?' in path else '?'
+        page = picqer_api_get(f"{path}{sep}offset={offset}")
+        results.extend(page)
+        if len(page) < 100:
+            break
+        offset += 100
+    return results
+
+def refresh_cache():
+    """Haal alle backorder data op en sla op in cache"""
+    if cache['loading']:
+        return
+    cache['loading'] = True
+    print("==> Cache vernieuwen...")
+    try:
+        # 1. Backorders
+        backorders = picqer_api_get_all('/backorders')
+        order_map = {}
+        for bo in backorders:
+            if bo['idorder'] not in order_map:
+                order_map[bo['idorder']] = []
+            order_map[bo['idorder']].append(bo)
+
+        order_ids = list(order_map.keys())
+
+        # 2. Orderdetails (gebatcht)
+        order_data = {}
+        for i in range(0, len(order_ids), 10):
+            batch = order_ids[i:i+10]
+            for oid in batch:
+                try:
+                    order_data[oid] = picqer_api_get(f"/orders/{oid}")
+                except:
+                    pass
+
+        # 3. Order comments
+        order_comments = {}
+        for oid in order_ids:
+            order = order_data.get(oid, {})
+            if order.get('comment_count', 0) > 0:
+                try:
+                    comments = picqer_api_get(f"/orders/{oid}/comments")
+                    if comments:
+                        comments.sort(key=lambda c: c.get('created_at', ''))
+                        order_comments[oid] = [
+                            {
+                                'tekst': c.get('body', c.get('comment', '')),
+                                'auteur': c.get('author', {}).get('full_name', '') if isinstance(c.get('author'), dict) else '',
+                                'datum': c.get('created_at', '')[:10] if c.get('created_at') else ''
+                            }
+                            for c in comments if c.get('body') or c.get('comment')
+                        ]
+                except:
+                    pass
+
+        # 4. Inkooporders
+        inkoop_orders = picqer_api_get_all('/purchaseorders?status=purchased')
+        product_io = {}
+        for io in inkoop_orders:
+            io_opmerking = []
+            if io.get('comment_count', 0) > 0:
+                try:
+                    po_comments = picqer_api_get(f"/purchaseorders/{io['idpurchaseorder']}/comments")
+                    if po_comments:
+                        po_comments.sort(key=lambda c: c.get('created_at', ''))
+                        io_opmerking = [
+                            {
+                                'tekst': c.get('body', c.get('comment', '')),
+                                'auteur': c.get('author', {}).get('full_name', '') if isinstance(c.get('author'), dict) else '',
+                                'datum': c.get('created_at', '')[:10] if c.get('created_at') else ''
+                            }
+                            for c in po_comments if c.get('body') or c.get('comment')
+                        ]
+                except:
+                    pass
+            for prod in io.get('products', []):
+                existing = product_io.get(prod['idproduct'])
+                if not existing or (io.get('delivery_date') and io['delivery_date'] < existing.get('leverdatum', '9999')):
+                    product_io[prod['idproduct']] = {
+                        'leverdatum': io.get('delivery_date'),
+                        'opmerking': io_opmerking
+                    }
+
+        # Sla op in cache
+        cache['data'] = {
+            'order_map': order_map,
+            'order_data': order_data,
+            'order_comments': order_comments,
+            'product_io': product_io,
+            'timestamp': time.time()
+        }
+        cache['timestamp'] = time.time()
+        print(f"==> Cache bijgewerkt: {len(order_ids)} orders")
+
+    except Exception as e:
+        print(f"==> Cache fout: {e}")
+    finally:
+        cache['loading'] = False
+
+def auto_refresh():
+    """Achtergrond thread die elke 10 minuten ververst"""
+    while True:
+        refresh_cache()
+        time.sleep(CACHE_TTL)
+
+# Start achtergrond refresh
+threading.Thread(target=auto_refresh, daemon=True).start()
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     error = None
@@ -111,11 +247,30 @@ def picqer_proxy(api_path):
             url,
             auth=(PICQER_API_KEY, 'x'),
             headers={'User-Agent': 'BackorderDashboard/1.0'},
-            timeout=30
+            timeout=60
         )
         return Response(resp.content, status=resp.status_code, content_type='application/json')
     except Exception as e:
         return jsonify({'error': str(e)}), 502
+
+@app.route('/cache-data')
+@login_required
+def cache_data():
+    """Geef gecachede data terug aan het dashboard"""
+    if cache['data'] is None:
+        return jsonify({'status': 'loading', 'message': 'Data wordt opgehaald, even geduld...'}), 202
+    return jsonify({
+        'status': 'ok',
+        'timestamp': cache['timestamp'],
+        'data': cache['data']
+    })
+
+@app.route('/cache-refresh')
+@login_required
+def cache_refresh():
+    """Forceer cache verversing"""
+    threading.Thread(target=refresh_cache, daemon=True).start()
+    return jsonify({'status': 'refreshing'})
 
 @app.route('/keuze')
 def keuze():
@@ -149,7 +304,7 @@ def keuze():
     <h2>Bedankt voor je keuze!</h2>
     <div class="badge">{label}</div>
     <p>Je hebt gekozen voor <strong>{label}</strong> voor bestelling <strong>{order}</strong>.</p>
-    <p style="margin-top:12px;">Er wordt automatisch een bevestigingsmail geopend. Klik op <strong>Verzenden</strong> om je keuze door te geven.</p>
+    <p style="margin-top:12px;">Er wordt automatisch een bevestigingsmail geopend.</p>
     <a href="{mailto_link}" class="mail-btn">✉ Bevestig je keuze per mail</a>
     <div class="uitleg">Werkt de mail niet automatisch? Klik dan op de knop hierboven.</div>
     </div></body></html>"""
@@ -160,7 +315,9 @@ def keuze():
 def config():
     return jsonify({
         'subdomain': PICQER_SUBDOMAIN,
-        'user': session['user']
+        'user': session['user'],
+        'cache_timestamp': cache['timestamp'],
+        'cache_loading': cache['loading']
     })
 
 @app.route('/me')
