@@ -414,129 +414,51 @@ async function picqerAlles(pad) {
   return resultaten;
 }
 
-// ── Data laden ────────────────────────────────────────────────────────────────
+// ── Data laden via server-side cache ─────────────────────────────────────────
 async function loadData() {
-  // Haal subdomain op — API key niet nodig op Render (server regelt dat)
   PICQER_SUBDOMAIN = document.getElementById('subdomain')?.value?.trim() || PICQER_SUBDOMAIN;
-  PICQER_API_KEY   = document.getElementById('apikey')?.value?.trim()    || PICQER_API_KEY || 'server';
-  if (!PICQER_SUBDOMAIN) {
-    document.getElementById('dashboard-inhoud').innerHTML =
-      `<div class="state-box"><div class="error-msg">⚠ Vul je subdomein in.</div></div>`;
-    return;
-  }
-  laadStatus();
+  PICQER_API_KEY   = 'server';
+
   try {
-    // 1. Backorders
-    const backorders = await picqerAlles('/backorders');
-    const orderMap = {};
-    for (const bo of backorders) {
-      if (!orderMap[bo.idorder]) orderMap[bo.idorder] = [];
-      orderMap[bo.idorder].push(bo);
+    // Probeer server-side cache op te halen
+    const resp = await fetch('/cache-data');
+
+    if (resp.status === 202) {
+      // Cache is nog aan het laden
+      document.getElementById('dashboard-inhoud').innerHTML =
+        `<div class="state-box"><div class="spinner"></div><div>Data wordt opgehaald op de server, even geduld… (dit duurt alleen de eerste keer)</div></div>`;
+      // Probeer opnieuw na 5 seconden
+      setTimeout(() => loadData(), 5000);
+      return;
     }
 
-    // 2. Orderdetails
-    const orderIds  = Object.keys(orderMap);
-    const orderData = {};
-    for (let i = 0; i < orderIds.length; i += 10) {
-      const batch   = orderIds.slice(i, i + 10);
-      const results = await Promise.all(batch.map(id => picqerGet(`/orders/${id}`).catch(() => null)));
-      batch.forEach((id, j) => { if (results[j]) orderData[id] = results[j]; });
-    }
+    if (!resp.ok) throw new Error(`Server fout ${resp.status}`);
 
-    // 2b. Order comments ophalen voor alle orders (gebatcht per 5)
-    const orderComments = {};
-    let eersteCommentGelogd = false;
-    for (let i = 0; i < orderIds.length; i += 5) {
-      const batch = orderIds.slice(i, i + 5);
-      const results = await Promise.all(batch.map(id =>
-        picqerGet(`/orders/${id}/comments`).catch(() => [])
-      ));
-      batch.forEach((id, j) => {
-        const comments = Array.isArray(results[j]) ? results[j] : [];
-        if (!eersteCommentGelogd && comments.length > 0) {
-          console.log('=== Comment object velden ===', Object.keys(comments[0]));
-          console.log('=== Comment object inhoud ===', comments[0]);
-          eersteCommentGelogd = true;
-        }
-        if (comments.length > 0) {
-          comments.sort((a, b) => new Date(a.created || a.created_at) - new Date(b.created || b.created_at));
-          orderComments[id] = comments.map(c => {
-            const tekst  = c.body || c.comment || c.message || c.text || '';
-            const auteur = c.author?.full_name || c.author?.username || c.username || c.user || '';
-            const datRaw = c.created || c.created_at || '';
-            const datum  = datRaw ? fmtDatum(datRaw.split(' ')[0]) : '';
-            return { tekst, auteur, datum };
-          }).filter(c => c.tekst);
-        }
-      });
-    }
+    const result = await resp.json();
+    const { order_map, order_data, order_comments, product_io } = result.data;
 
-    // 3. Inkooporders ophalen voor leverdatum + opmerkingen
-    let inkoopOrders = [];
-    try { inkoopOrders = await picqerAlles('/purchaseorders?status=purchased'); } catch(e) {}
-
-    // Haal volledige PO details op voor de opmerkingen (apart endpoint)
-    const productIO = {};
-    for (const io of inkoopOrders) {
-      // remarks = PO nummer (bijv. "PO-06739"), NIET de opmerking
-      // De echte opmerking zit in de volledige PO details onder 'comment_count' > 0
-      // We gebruiken purchaseorderid als referentie en halen comments apart op indien aanwezig
-      let ioOpmerking = [];
-      if (io.comment_count > 0) {
-        try {
-          const poDetails = await picqerGet(`/purchaseorders/${io.idpurchaseorder}/comments`);
-          if (Array.isArray(poDetails) && poDetails.length > 0) {
-            poDetails.sort((a, b) => new Date(a.created || a.created_at) - new Date(b.created || b.created_at));
-            ioOpmerking = poDetails.map(c => {
-              const tekst  = c.body || c.comment || c.message || c.text || '';
-              const auteur = c.author?.full_name || c.author?.username || c.username || c.user || '';
-              const datRaw = c.created_at || c.created || '';
-              const datum  = datRaw ? fmtDatum(datRaw.split(' ')[0]) : '';
-              return { tekst, auteur, datum };
-            }).filter(c => c.tekst);
-          }
-        } catch(e) {}
-      }
-      for (const prod of (io.products || [])) {
-        const bestaand = productIO[prod.idproduct];
-        if (!bestaand || (io.delivery_date && io.delivery_date < bestaand.leverdatum)) {
-          productIO[prod.idproduct] = {
-            leverdatum:  io.delivery_date,
-            opmerking:   ioOpmerking,
-            ionummer:    io.purchaseorderid || '',
-          };
-        }
-      }
-    }
-
-    // 4. Rijen bouwen — volledige order, niet alleen backorder producten
-    alleRijen = orderIds.map(orderId => {
-      const bos   = orderMap[orderId];
-      const order = orderData[orderId] || {};
+    // Verwerk de data naar alleRijen
+    alleRijen = Object.keys(order_map).map(orderId => {
+      const bos   = order_map[orderId];
+      const order = order_data[orderId] || {};
       const ref   = order.reference || order.orderid || `#${orderId}`;
 
-      // Maak een map van backorder producten
       const boMap = {};
       for (const bo of bos) boMap[bo.idproduct] = bo;
 
-      // Opmerking: customer_remarks OF interne comments (array van objecten)
       const opmerking = order.customer_remarks
         ? [{ tekst: order.customer_remarks, auteur: '', datum: '' }]
-        : (orderComments[orderId] || []);
+        : (order_comments[orderId] || []);
 
-      // Loop over ALLE producten op de order
       const producten = (order.products || []).map(regel => {
         const bo        = boMap[regel.idproduct];
-        const io        = productIO[regel.idproduct];
+        const io        = product_io[regel.idproduct];
         const verkocht  = regel.amount           || 0;
         const verzonden = regel.amount_delivered || 0;
         const boAantal  = bo ? bo.amount : 0;
         const isBO      = !!bo;
+        const ioOpmerking = io?.opmerking || [];
 
-        // PO opmerking: uit de inkooporder OF uit de productregel zelf
-        const ioOpmerking = io?.opmerking || regel.remarks || regel.opmerking || '';
-
-        // Status bepalen
         let status;
         if (!isBO) {
           status = verzonden >= verkocht ? 'verzonden' : 'deellevering';
@@ -550,25 +472,21 @@ async function loadData() {
         return {
           naam:        regel.name        || `Product #${regel.idproduct}`,
           code:        regel.productcode || '',
-          verkocht,
-          verzonden,
+          verkocht, verzonden,
           bo:          boAantal,
-          isBO,
-          status,
+          isBO, status,
           leverdatum:  (status === 'verzonden' || status === 'deellevering') ? null : (io?.leverdatum || null),
-          verzendDatum: regel.deliverydate || regel.shipped_at || regel.delivered_at || null,
+          verzendDatum: regel.deliverydate || null,
           ioOpmerking,
         };
       });
 
-      // Sorteer: probleem producten bovenaan (op statusvolgorde)
       producten.sort((a, b) => (STATUS_VOLGORDE[a.status] || 99) - (STATUS_VOLGORDE[b.status] || 99));
 
       const totaalVerkocht  = producten.reduce((s,p) => s + p.verkocht,  0);
       const totaalVerzonden = producten.reduce((s,p) => s + p.verzonden, 0);
       const totaalBO        = producten.filter(p => p.isBO).reduce((s,p) => s + p.bo, 0);
 
-      // Overkoepelende status
       const statussen = producten.filter(p => p.isBO).map(p => p.status);
       let overallStatus = 'verzonden';
       if (statussen.includes('niet-ingekocht'))  overallStatus = 'niet-ingekocht';
@@ -593,24 +511,27 @@ async function loadData() {
     updateStats();
     renderTabel();
     const nu = new Date().toLocaleTimeString('nl-NL');
-    document.getElementById('laatste-refresh').textContent = 'Laatste update: ' + nu;
+    const cachetijd = result.timestamp
+      ? new Date(result.timestamp * 1000).toLocaleTimeString('nl-NL')
+      : nu;
+    document.getElementById('laatste-refresh').textContent = 'Laatste update: ' + cachetijd;
 
-    // Sla data op in cache
+    // Sla ook op in localStorage als backup
     try {
       localStorage.setItem('bo_cache', JSON.stringify(alleRijen));
       localStorage.setItem('bo_cache_tijd', new Date().toISOString());
     } catch(e) {}
 
   } catch(err) {
-    // Bij fout: toon cache als die beschikbaar is
-    const cache = localStorage.getItem('bo_cache');
-    if (cache && alleRijen.length === 0) {
+    // Val terug op localStorage cache
+    const localCache = localStorage.getItem('bo_cache');
+    if (localCache && alleRijen.length === 0) {
       try {
-        alleRijen = JSON.parse(cache);
+        alleRijen = JSON.parse(localCache);
         updateStats();
         renderTabel();
         const cacheTijd = localStorage.getItem('bo_cache_tijd');
-        const tijdLabel = cacheTijd ? fmtDatum(cacheTijd.split('T')[0]) : '?';
+        const tijdLabel = cacheTijd ? new Date(cacheTijd).toLocaleTimeString('nl-NL') : '?';
         document.getElementById('laatste-refresh').textContent =
           '⚠ Geen verbinding — cache van ' + tijdLabel;
         return;
@@ -619,11 +540,10 @@ async function loadData() {
     document.getElementById('dashboard-inhoud').innerHTML = `
       <div class="state-box">
         <div class="error-msg">⚠ ${esc(err.message)}</div>
-        <div class="error-sub">Controleer je subdomein en API sleutel. Zorg dat proxy.py actief is.</div>
+        <div class="error-sub">Probeer het opnieuw of neem contact op met de beheerder.</div>
       </div>`;
   }
 }
-
 // ── Stats ─────────────────────────────────────────────────────────────────────
 function updateStats() {
   document.getElementById('stat-totaal').textContent         = alleRijen.length;
