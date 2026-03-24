@@ -4,13 +4,11 @@ Backorder Dashboard - Flask Server voor Render
 """
 
 from flask import Flask, render_template_string, request, session, redirect, url_for, jsonify, Response
-from werkzeug.security import check_password_hash, generate_password_hash
+from werkzeug.security import generate_password_hash
 import requests
 import os
 import urllib.parse
-import threading
 import time
-import json
 from functools import wraps
 
 app = Flask(__name__)
@@ -27,7 +25,7 @@ USERS = {
     'joran':  os.environ.get('PASS_JORAN',  'Welkom123!'),
 }
 
-# ── Server-side cache ─────────────────────────────────────────────────────────
+# ── Cache ─────────────────────────────────────────────────────────────────────
 cache = {
     'data': None,
     'timestamp': None,
@@ -82,8 +80,7 @@ LOGIN_HTML = """<!DOCTYPE html>
 </body>
 </html>"""
 
-def picqer_api_get(path):
-    """Directe Picqer API call vanaf de server"""
+def picqer_get(path):
     url = f"https://{PICQER_SUBDOMAIN}.picqer.com/api/v1{path}"
     resp = requests.get(
         url,
@@ -94,13 +91,12 @@ def picqer_api_get(path):
     resp.raise_for_status()
     return resp.json()
 
-def picqer_api_get_all(path):
-    """Pagineer door alle resultaten"""
+def picqer_get_all(path):
     results = []
     offset = 0
     while True:
         sep = '&' if '?' in path else '?'
-        page = picqer_api_get(f"{path}{sep}offset={offset}")
+        page = picqer_get(f"{path}{sep}offset={offset}")
         results.extend(page)
         if len(page) < 100:
             break
@@ -108,31 +104,29 @@ def picqer_api_get_all(path):
     return results
 
 def refresh_cache():
-    """Haal alle backorder data op en sla op in cache"""
     if cache['loading']:
         return
     cache['loading'] = True
     print("==> Cache vernieuwen...")
     try:
         # 1. Backorders
-        backorders = picqer_api_get_all('/backorders')
+        backorders = picqer_get_all('/backorders')
         order_map = {}
         for bo in backorders:
-            if bo['idorder'] not in order_map:
-                order_map[bo['idorder']] = []
-            order_map[bo['idorder']].append(bo)
+            oid = bo['idorder']
+            if oid not in order_map:
+                order_map[oid] = []
+            order_map[oid].append(bo)
 
         order_ids = list(order_map.keys())
 
-        # 2. Orderdetails (gebatcht)
+        # 2. Orderdetails
         order_data = {}
-        for i in range(0, len(order_ids), 10):
-            batch = order_ids[i:i+10]
-            for oid in batch:
-                try:
-                    order_data[oid] = picqer_api_get(f"/orders/{oid}")
-                except:
-                    pass
+        for oid in order_ids:
+            try:
+                order_data[oid] = picqer_get(f"/orders/{oid}")
+            except:
+                pass
 
         # 3. Order comments
         order_comments = {}
@@ -140,10 +134,10 @@ def refresh_cache():
             order = order_data.get(oid, {})
             if order.get('comment_count', 0) > 0:
                 try:
-                    comments = picqer_api_get(f"/orders/{oid}/comments")
+                    comments = picqer_get(f"/orders/{oid}/comments")
                     if comments:
                         comments.sort(key=lambda c: c.get('created_at', ''))
-                        order_comments[oid] = [
+                        order_comments[str(oid)] = [
                             {
                                 'tekst': c.get('body', c.get('comment', '')),
                                 'auteur': c.get('author', {}).get('full_name', '') if isinstance(c.get('author'), dict) else '',
@@ -155,13 +149,13 @@ def refresh_cache():
                     pass
 
         # 4. Inkooporders
-        inkoop_orders = picqer_api_get_all('/purchaseorders?status=purchased')
+        inkoop_orders = picqer_get_all('/purchaseorders?status=purchased')
         product_io = {}
         for io in inkoop_orders:
             io_opmerking = []
             if io.get('comment_count', 0) > 0:
                 try:
-                    po_comments = picqer_api_get(f"/purchaseorders/{io['idpurchaseorder']}/comments")
+                    po_comments = picqer_get(f"/purchaseorders/{io['idpurchaseorder']}/comments")
                     if po_comments:
                         po_comments.sort(key=lambda c: c.get('created_at', ''))
                         io_opmerking = [
@@ -175,37 +169,27 @@ def refresh_cache():
                 except:
                     pass
             for prod in io.get('products', []):
-                existing = product_io.get(prod['idproduct'])
+                pid = prod['idproduct']
+                existing = product_io.get(pid)
                 if not existing or (io.get('delivery_date') and io['delivery_date'] < existing.get('leverdatum', '9999')):
-                    product_io[prod['idproduct']] = {
+                    product_io[pid] = {
                         'leverdatum': io.get('delivery_date'),
                         'opmerking': io_opmerking
                     }
 
-        # Sla op in cache
         cache['data'] = {
-            'order_map': order_map,
-            'order_data': order_data,
+            'order_map': {str(k): v for k, v in order_map.items()},
+            'order_data': {str(k): v for k, v in order_data.items()},
             'order_comments': order_comments,
-            'product_io': product_io,
-            'timestamp': time.time()
+            'product_io': {str(k): v for k, v in product_io.items()}
         }
         cache['timestamp'] = time.time()
-        print(f"==> Cache bijgewerkt: {len(order_ids)} orders")
+        print(f"==> Cache klaar: {len(order_ids)} orders")
 
     except Exception as e:
         print(f"==> Cache fout: {e}")
     finally:
         cache['loading'] = False
-
-def auto_refresh():
-    """Achtergrond thread die elke 10 minuten ververst"""
-    while True:
-        refresh_cache()
-        time.sleep(CACHE_TTL)
-
-# Start achtergrond refresh
-threading.Thread(target=auto_refresh, daemon=True).start()
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -256,9 +240,13 @@ def picqer_proxy(api_path):
 @app.route('/cache-data')
 @login_required
 def cache_data():
-    """Geef gecachede data terug aan het dashboard"""
+    # Ververs cache als leeg of verlopen
+    if cache['data'] is None or (cache['timestamp'] and time.time() - cache['timestamp'] > CACHE_TTL):
+        refresh_cache()
+
     if cache['data'] is None:
-        return jsonify({'status': 'loading', 'message': 'Data wordt opgehaald, even geduld...'}), 202
+        return jsonify({'status': 'loading'}), 202
+
     return jsonify({
         'status': 'ok',
         'timestamp': cache['timestamp'],
@@ -268,9 +256,8 @@ def cache_data():
 @app.route('/cache-refresh')
 @login_required
 def cache_refresh():
-    """Forceer cache verversing"""
-    threading.Thread(target=refresh_cache, daemon=True).start()
-    return jsonify({'status': 'refreshing'})
+    refresh_cache()
+    return jsonify({'status': 'ok', 'timestamp': cache['timestamp']})
 
 @app.route('/keuze')
 def keuze():
